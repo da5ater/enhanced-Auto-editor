@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wav
+*.mp3
+*.flac
+*.xml
+
+# Temp files
+*.tmp
+*.temp
+*_temp*
+*_no_silence*
+*_enhanced*
+*_final*
