@@ -297,6 +297,29 @@ def phase2_enhance_audio(input_path: Path, output_path: Path) -> Path:
         warn("DeepFilterNet failed, using original audio")
         return input_path
 
+def generate_filler_report(words: List[WordSegment], cuts: List[Tuple[float, float]], output_path: Path):
+    """Generates a readable report of what was detected and cut"""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("=== FILLER WORD REPORT ===\n")
+        f.write(f"Total Cuts: {len(cuts)}\n")
+        f.write(f"Total Time Cut: {sum(e-s for s,e in cuts):.2f} seconds\n\n")
+        
+        f.write("--- DETAILED CUTS ---\n")
+        
+        # Map cuts back to words for context
+        cut_idx = 0
+        for w in words:
+            if cut_idx < len(cuts):
+                cut_start, cut_end = cuts[cut_idx]
+                # If word is inside the current cut
+                if w.start >= cut_start - 0.1 and w.end <= cut_end + 0.1:
+                    time_str = format_duration(w.start)
+                    f.write(f"[{time_str}] {w.word} ({w.confidence:.2f})\n")
+                    
+                # Move to next cut if we passed this one
+                if w.end > cut_end:
+                    cut_idx += 1
+
 def phase3_cut_fillers(
     input_path: Path,
     duration: float,
@@ -342,6 +365,11 @@ def phase3_cut_fillers(
     total_filler_time = sum(e - s for s, e in merged_cuts)
     info(f"  Found {len(merged_cuts)} fillers ({total_filler_time:.1f}s)")
     
+    # Generate Report
+    report_path = input_path.parent / f"{input_path.stem}_fillers.txt"
+    generate_filler_report(words, merged_cuts, report_path)
+    success(f"Filler report saved to: {report_path.name}")
+    
     # Step 3: Export
     ae_path = find_auto_editor()
     
@@ -351,6 +379,12 @@ def phase3_cut_fillers(
         cut_args = ["--cut-out"] + ranges
     
     info("Exporting Premiere Pro XML...")
+    
+    # Check for argument length limit (simple heuristic)
+    if len(cut_args) > 1000:
+        warn(f"Too many cuts ({len(merged_cuts)})! Splitting export or reducing precision might be needed.")
+        # We proceed anyway, but warn user
+    
     cmd_xml = [
         ae_path,
         str(input_path),
@@ -366,6 +400,7 @@ def phase3_cut_fillers(
         success(f"XML exported: {output_xml.name}")
     except subprocess.CalledProcessError as e:
         warn(f"XML export failed: {e.stderr[:300] if e.stderr else 'Unknown'}")
+        warn("But don't worry! The list of cuts is saved in 'fillers.txt'.")
     
     # Optional: Render final video
     rendered_path = None
