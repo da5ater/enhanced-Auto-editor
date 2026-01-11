@@ -281,109 +281,61 @@ def extract_audio_wav(input_path: Path, output_path: Path):
     ]
     subprocess.run(cmd, check=True, capture_output=True)
 
-def load_whisper_model():
-    """Load Whisper model with fallback: small → base → tiny, GPU → CPU"""
+def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
+    """Transcribe with GPU-only fallback: small → base → tiny"""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         error("faster-whisper not installed! Run: pip install faster-whisper")
         sys.exit(1)
     
-    # Try models from best to smallest
+    prompt = "يعني, امم, اا, اه, طب, بقى, Um, uh, ah, like, so, you know."
+    
+    # GPU-only fallback: small → base → tiny
     models_to_try = ["small", "base", "tiny"]
     
     for model_name in models_to_try:
-        # Try GPU first
         try:
-            info(f"  Trying {model_name} model on GPU...")
+            info(f"  Loading {model_name} model on GPU...")
             model = WhisperModel(model_name, device="cuda", compute_type="int8")
-            success(f"  Loaded {model_name} on GPU (CUDA)")
-            return model
+            success(f"  Loaded {model_name} on GPU")
+            
+            info("  Transcribing...")
+            bar = ProgressBar(total=duration)
+            
+            segments_gen, _ = model.transcribe(
+                str(audio_path),
+                beam_size=3,
+                word_timestamps=True,
+                initial_prompt=prompt,
+                language=None,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            
+            words = []
+            for segment in segments_gen:
+                bar.update(segment.end, "Transcribing")
+                if segment.words:
+                    for w in segment.words:
+                        words.append(WordSegment(
+                            word=w.word.strip(),
+                            start=w.start,
+                            end=w.end,
+                            confidence=math.exp(segment.avg_logprob)
+                        ))
+            
+            bar.finish("Transcription complete")
+            return words
+            
         except Exception as e:
-            warn(f"  GPU failed for {model_name}: {str(e)[:50]}...")
-        
-        # Try CPU
-        try:
-            info(f"  Trying {model_name} model on CPU...")
-            model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            success(f"  Loaded {model_name} on CPU")
-            return model
-        except Exception as e:
-            warn(f"  CPU failed for {model_name}: {str(e)[:50]}...")
+            warn(f"  {model_name} failed: {str(e)[:60]}...")
+            if model_name != models_to_try[-1]:
+                info(f"  Trying smaller model...")
+            continue
     
-    error("Could not load any Whisper model!")
+    error("All GPU models failed! Try using --groq instead.")
     sys.exit(1)
-
-def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
-    model = load_whisper_model()
-    
-    info("  Transcribing...")
-    bar = ProgressBar(total=duration)
-    
-    prompt = "يعني, امم, اا, اه, طب, بقى, Um, uh, ah, like, so, you know."
-    
-    try:
-        segments_gen, _ = model.transcribe(
-            str(audio_path),
-            beam_size=3,
-            word_timestamps=True,
-            initial_prompt=prompt,
-            language=None,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
-        
-        words = []
-        for segment in segments_gen:
-            bar.update(segment.end, "Transcribing")
-            if segment.words:
-                for w in segment.words:
-                    words.append(WordSegment(
-                        word=w.word.strip(),
-                        start=w.start,
-                        end=w.end,
-                        confidence=math.exp(segment.avg_logprob)
-                    ))
-        
-        bar.finish("Transcription complete")
-        return words
-    except RuntimeError as e:
-        if "libcublas" in str(e) or "CUDA" in str(e):
-            warn(f"  CUDA error: {str(e)[:80]}...")
-            warn("  Falling back to CPU...")
-            # Reload model on CPU
-            try:
-                from faster_whisper import WhisperModel
-                model = WhisperModel("base", device="cpu", compute_type="int8")
-                segments_gen, _ = model.transcribe(
-                    str(audio_path),
-                    beam_size=3,
-                    word_timestamps=True,
-                    initial_prompt=prompt,
-                    language=None,
-                    vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=500)
-                )
-                
-                words = []
-                for segment in segments_gen:
-                    bar.update(segment.end, "Transcribing")
-                    if segment.words:
-                        for w in segment.words:
-                            words.append(WordSegment(
-                                word=w.word.strip(),
-                                start=w.start,
-                                end=w.end,
-                                confidence=math.exp(segment.avg_logprob)
-                            ))
-                
-                bar.finish("Transcription complete")
-                return words
-            except Exception as e2:
-                error(f"CPU fallback also failed: {e2}")
-                sys.exit(1)
-        else:
-            raise
 
 def transcribe_groq_chunk(audio_path: Path, api_key: str, offset: float = 0) -> List[WordSegment]:
     try:
