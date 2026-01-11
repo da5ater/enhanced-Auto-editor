@@ -311,7 +311,7 @@ def extract_audio_wav(input_path: Path, output_path: Path):
     subprocess.run(cmd, check=True, capture_output=True)
 
 def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
-    """Transcribe with GPU-only fallback: small → base → tiny"""
+    """Transcribe with GPU-only fallback: large-v3-turbo → large-v3 → medium → small → base → tiny"""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -320,21 +320,30 @@ def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
     
     prompt = "يعني, امم, اا, اه, طب, بقى, Um, uh, ah, like, so, you know."
     
-    # GPU-only fallback: small → base → tiny
-    models_to_try = ["small", "base", "tiny"]
+    # GPU-only fallback sequence
+    # Note: large-v3-turbo and large-v3 might fail on 4GB VRAM, but it's worth trying as fallback handles it.
+    models_to_try = [
+        "deepdml/faster-whisper-large-v3-turbo-ct2", # large-v3-turbo
+        "large-v3",
+        "medium",
+        "small",
+        "base",
+        "tiny"
+    ]
     
     for model_name in models_to_try:
+        display_name = model_name.split("/")[-1] # Cleaner name for display
         try:
-            info(f"  Loading {model_name} model on GPU...")
+            info(f"  Loading {display_name} model on GPU...")
             model = WhisperModel(model_name, device="cuda", compute_type="int8")
-            success(f"  Loaded {model_name} on GPU")
+            success(f"  Loaded {display_name} on GPU")
             
             info("  Transcribing...")
             bar = ProgressBar(total=duration)
             
             segments_gen, _ = model.transcribe(
                 str(audio_path),
-                beam_size=3,
+                beam_size=5, # Slightly better quality for larger models
                 word_timestamps=True,
                 initial_prompt=prompt,
                 language=None,
@@ -358,7 +367,7 @@ def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
             return words
             
         except Exception as e:
-            warn(f"  {model_name} failed: {str(e)[:60]}...")
+            warn(f"  {display_name} failed: {str(e)[:100]}...")
             if model_name != models_to_try[-1]:
                 info(f"  Trying smaller model...")
             continue
