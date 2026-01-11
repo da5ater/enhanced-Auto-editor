@@ -78,30 +78,48 @@ def manage_hyprwhspr(stop=True):
 
 # --- Fix for missing CUDA libraries (Arch Linux / venv) ---
 def add_cuda_to_path():
-    """Adds local nvidia pip package paths to LD_LIBRARY_PATH"""
-    site_packages = Path(__file__).parent / ".." / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-    
-    # Also check user site-packages if not running from venv
+    """Adds local nvidia pip package paths to LD_LIBRARY_PATH and re-execs if needed"""
     import site
-    user_site = Path(site.getusersitepackages())
     
-    paths_to_check = [site_packages, user_site]
+    # 1. Identify all possible site-packages
+    search_paths = [Path(site.getusersitepackages())]
+    if hasattr(sys, 'real_prefix') or (sys.base_prefix != sys.prefix):
+        # We are in a venv
+        venv_site = Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+        search_paths.append(venv_site)
     
-    libs_to_add = []
-    for sp in paths_to_check:
-        cublas = sp / "nvidia" / "cublas" / "lib"
-        cudnn = sp / "nvidia" / "cudnn" / "lib"
-        if cublas.exists(): libs_to_add.append(str(cublas))
-        if cudnn.exists(): libs_to_add.append(str(cudnn))
+    # 2. Find nvidia library directories
+    cuda_libs = []
+    for sp in search_paths:
+        if not sp.exists(): continue
+        # Check all nvidia subpackages
+        nvidia_dir = sp / "nvidia"
+        if nvidia_dir.exists():
+            for sub in nvidia_dir.iterdir():
+                lib_dir = sub / "lib"
+                if lib_dir.exists():
+                    cuda_libs.append(str(lib_dir))
     
-    if libs_to_add:
-        current_ld = os.environ.get("LD_LIBRARY_PATH", "")
-        new_ld = ":".join(libs_to_add + [current_ld])
+    if not cuda_libs:
+        return
+
+    # 3. Check if they are already in LD_LIBRARY_PATH
+    current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    missing = [p for p in cuda_libs if p not in current_ld]
+    
+    if missing:
+        # We need to update LD_LIBRARY_PATH and RE-EXECUTE the script
+        # because LD_LIBRARY_PATH is only read at process startup
+        new_ld = ":".join(cuda_libs + ([current_ld] if current_ld else []))
         os.environ["LD_LIBRARY_PATH"] = new_ld
-        # We must re-exec if we changed LD_LIBRARY_PATH for it to take effect on loaded shared libs?
-        # Actually, for ctypes/import it might work if done before import, 
-        # but faster-whisper uses CTranslate2 which loads dynamically.
-        # Let's just set it in os.environ, usually enough for dlopen.
+        
+        # Prevent infinite loop
+        if os.environ.get("EDIT_REEXEC") == "1":
+            return
+        os.environ["EDIT_REEXEC"] = "1"
+        
+        # Restart the script with the new environment
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 add_cuda_to_path()
 
