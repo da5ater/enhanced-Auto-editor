@@ -42,6 +42,10 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
+# --- Environment Cleanup ---
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # --- Hyprwhspr Management ---
 HYPRWHSPR_COMMAND = []
 
@@ -352,11 +356,10 @@ def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
     prompt = "يعني, امم, اا, اه, طب, بقى, Um, uh, ah, like, so, you know."
     
     # GPU-only fallback sequence
-    # Note: large-v3-turbo and large-v3 might fail on 4GB VRAM, but it's worth trying as fallback handles it.
+    # Note: large-v3-turbo might fail on 4GB VRAM, so we fall back to 'medium' (guaranteed to fit)
     models_to_try = [
-        "deepdml/faster-whisper-large-v3-turbo-ct2", # large-v3-turbo
-        "Systran/faster-distil-whisper-large-v3",    # Distil-Whisper (Faster)
-        "medium",
+        "deepdml/faster-whisper-large-v3-turbo-ct2", # large-v3-turbo (Best)
+        "medium",                                      # medium (Reliable fallback for 4GB VRAM)
         "small",
         "base",
         "tiny"
