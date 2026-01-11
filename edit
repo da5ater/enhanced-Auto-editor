@@ -324,7 +324,7 @@ def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
     # Note: large-v3-turbo and large-v3 might fail on 4GB VRAM, but it's worth trying as fallback handles it.
     models_to_try = [
         "deepdml/faster-whisper-large-v3-turbo-ct2", # large-v3-turbo
-        "large-v3",
+        "Systran/faster-distil-whisper-large-v3",    # Distil-Whisper (Faster)
         "medium",
         "small",
         "base",
