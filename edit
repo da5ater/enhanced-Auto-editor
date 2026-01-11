@@ -4,10 +4,10 @@ Enhanced Auto-Editor - Smart Video Editor
 
 Removes silence, enhances audio (DeepFilterNet AI), and removes filler words.
 
-PIPELINE (Optimized for speed & quality):
-  Stage 1: Remove silence with auto-editor (instant, local)
-  Stage 2: Enhance audio with DeepFilterNet AI (studio-quality voice)
-  Stage 3: Transcribe + Remove fillers + Export Premiere Pro XML
+3-PHASE PIPELINE:
+  Phase 1: Cut silent parts (auto-editor, fast, local)
+  Phase 2: Enhance audio with DeepFilterNet AI (studio-quality voice)
+  Phase 3: Cut awkward parts / fillers (transcribe → detect → cut)
 
 Supports:
   - Local Whisper (small model) for 4GB VRAM GPUs
@@ -20,7 +20,6 @@ Usage:
   edit video.mp4 --groq             # Force Groq API (recommended)
   edit video.mp4 --set-groq-key     # Set/update Groq API key
   edit video.mp4 --no-enhance       # Skip audio enhancement
-  edit video.mp4 --premiere         # Export Premiere Pro XML only
   edit video.mp4 --render           # Render final video (default: XML only)
 
 Groq Free Tier Limits:
@@ -176,7 +175,7 @@ def find_auto_editor() -> str:
 # --- DeepFilterNet Audio Enhancement ---
 def enhance_audio_deepfilter(input_path: Path, output_path: Path) -> bool:
     """
-    Stage 2: Enhance audio using DeepFilterNet AI.
+    Phase 2: Enhance audio using DeepFilterNet AI.
     
     DeepFilterNet is a state-of-the-art deep learning model for:
     - Background noise removal
@@ -187,17 +186,17 @@ def enhance_audio_deepfilter(input_path: Path, output_path: Path) -> bool:
     """
     if not DEEP_FILTER_BIN.exists():
         warn(f"DeepFilterNet not found at {DEEP_FILTER_BIN}")
-        warn("Install with: curl -L -o ~/.local/bin/deep-filter 'https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl' && chmod +x ~/.local/bin/deep-filter")
+        warn("Install: curl -L -o ~/.local/bin/deep-filter 'https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl' && chmod +x ~/.local/bin/deep-filter")
         return False
     
-    info("STAGE 2: Enhancing audio with DeepFilterNet AI...")
+    info("Running DeepFilterNet AI enhancement...")
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         
         # Extract audio as WAV (48kHz for DeepFilterNet)
         wav_input = tmpdir / "input.wav"
-        info("Extracting audio...")
+        info("  Extracting audio...")
         cmd_extract = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(input_path),
@@ -211,7 +210,7 @@ def enhance_audio_deepfilter(input_path: Path, output_path: Path) -> bool:
             return False
         
         # Run DeepFilterNet
-        info("Running DeepFilterNet AI...")
+        info("  Processing with AI...")
         out_dir = tmpdir / "out"
         cmd_df = [
             str(DEEP_FILTER_BIN),
@@ -232,7 +231,7 @@ def enhance_audio_deepfilter(input_path: Path, output_path: Path) -> bool:
             return False
         
         # Merge enhanced audio with video + loudness normalization
-        info("Merging enhanced audio with video...")
+        info("  Merging enhanced audio...")
         cmd_merge = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(input_path),
@@ -246,7 +245,7 @@ def enhance_audio_deepfilter(input_path: Path, output_path: Path) -> bool:
         ]
         try:
             subprocess.run(cmd_merge, check=True, capture_output=True)
-            success("DeepFilterNet enhancement complete!")
+            success("Audio enhancement complete!")
             return True
         except subprocess.CalledProcessError as e:
             warn(f"Audio merge failed: {e}")
@@ -289,16 +288,16 @@ def transcribe_local(audio_path: Path, duration: float) -> List[WordSegment]:
         error("faster-whisper not installed! Run: pip install faster-whisper")
         sys.exit(1)
     
-    info("Loading Whisper small model (local GPU)...")
+    info("  Loading Whisper small model...")
     
     try:
         model = WhisperModel("small", device="cuda", compute_type="int8")
-        success("GPU loaded (CUDA)")
+        success("  GPU loaded (CUDA)")
     except Exception as e:
-        warn(f"GPU failed ({e}), falling back to CPU...")
+        warn(f"  GPU failed ({e}), using CPU...")
         model = WhisperModel("small", device="cpu", compute_type="int8")
     
-    info("Transcribing with local Whisper...")
+    info("  Transcribing...")
     bar = ProgressBar(total=duration)
     
     prompt = "يعني, امم, اا, اه, طب, بقى, Um, uh, ah, like, so, you know."
@@ -370,7 +369,7 @@ def transcribe_groq_chunk(audio_path: Path, api_key: str, offset: float = 0) -> 
     return words
 
 def transcribe_groq(input_path: Path, duration: float, api_key: str, chunk_size: int) -> List[WordSegment]:
-    info(f"Using Groq API with Whisper Large V3 Turbo...")
+    info(f"  Using Groq API (Whisper Large V3 Turbo)...")
     
     chunks = []
     start = 0
@@ -379,7 +378,7 @@ def transcribe_groq(input_path: Path, duration: float, api_key: str, chunk_size:
         chunks.append((start, end - start))
         start = end - GROQ_OVERLAP if end < duration else end
     
-    info(f"Processing {len(chunks)} chunks ({chunk_size}s each)...")
+    info(f"  Processing {len(chunks)} chunks...")
     bar = ProgressBar(total=len(chunks))
     
     all_words = []
@@ -393,20 +392,20 @@ def transcribe_groq(input_path: Path, duration: float, api_key: str, chunk_size:
             
             size_mb = chunk_path.stat().st_size / (1024 * 1024)
             if size_mb > 24:
-                warn(f"Chunk {i} is {size_mb:.1f}MB (>24MB), may fail.")
+                warn(f"  Chunk {i} is {size_mb:.1f}MB (>24MB), may fail.")
             
             try:
                 words = transcribe_groq_chunk(chunk_path, api_key, offset=start_time)
                 all_words.extend(words)
             except Exception as e:
-                warn(f"Chunk {i} failed: {e}")
+                warn(f"  Chunk {i} failed: {e}")
             
             bar.update(i + 1, f"Chunk {i+1}/{len(chunks)}")
             
             if i < len(chunks) - 1:
                 time.sleep(0.5)
     
-    bar.finish("Groq transcription complete")
+    bar.finish("Transcription complete")
     
     all_words.sort(key=lambda w: w.start)
     deduped = []
@@ -459,11 +458,14 @@ def merge_cuts(cuts: List[Tuple[float, float]], merge_gap: float = 0.1) -> List[
     
     return merged
 
-# === PIPELINE STAGES ===
+# === 3-PHASE PIPELINE ===
 
-def stage1_remove_silence(input_path: Path, output_path: Path) -> Tuple[Path, float]:
-    """Stage 1: Remove silence using auto-editor (fast, local)."""
-    info("STAGE 1: Removing silence...")
+def phase1_cut_silence(input_path: Path, output_path: Path) -> Tuple[Path, float]:
+    """
+    PHASE 1: Cut silent parts
+    Uses auto-editor for fast, local silence detection and removal.
+    """
+    info("Cutting silent parts...")
     
     ae_path = find_auto_editor()
     original_duration = get_duration(input_path)
@@ -486,66 +488,69 @@ def stage1_remove_silence(input_path: Path, output_path: Path) -> Tuple[Path, fl
         new_duration = get_duration(output_path)
         saved = original_duration - new_duration
         saved_pct = (saved / original_duration * 100) if original_duration > 0 else 0
-        success(f"Silence removed: {format_duration(original_duration)} → {format_duration(new_duration)} (-{saved_pct:.1f}%)")
+        success(f"Silence cut: {format_duration(original_duration)} → {format_duration(new_duration)} (-{saved_pct:.1f}%)")
         return output_path, new_duration
     except subprocess.CalledProcessError as e:
         error(f"auto-editor failed: {e.stderr[:500] if e.stderr else 'Unknown error'}")
         sys.exit(1)
 
-def stage2_enhance_audio(input_path: Path, output_path: Path) -> Path:
-    """Stage 2: Enhance audio with DeepFilterNet AI."""
+def phase2_enhance_audio(input_path: Path, output_path: Path) -> Path:
+    """
+    PHASE 2: Enhance audio with DeepFilterNet AI
+    Removes background noise, enhances voice clarity.
+    """
     if enhance_audio_deepfilter(input_path, output_path):
         return output_path
     else:
         warn("DeepFilterNet failed, using original audio")
         return input_path
 
-def stage3_transcribe(
+def phase3_cut_fillers(
     input_path: Path,
     duration: float,
     use_groq: bool,
-    api_key: Optional[str] = None,
-    chunk_size: int = GROQ_CHUNK_SIZE
-) -> List[WordSegment]:
-    """Stage 3a: Transcribe the enhanced video."""
-    info("STAGE 3: Transcribing audio...")
+    api_key: Optional[str],
+    chunk_size: int,
+    output_xml: Path,
+    output_video: Optional[Path] = None,
+    render: bool = False
+) -> Tuple[List[WordSegment], Path, Optional[Path]]:
+    """
+    PHASE 3: Cut awkward parts (filler words)
+    1. Transcribe audio to get word timestamps
+    2. Detect filler words (um, ah, يعني, etc.)
+    3. Export Premiere Pro XML with cuts marked
+    """
     
+    # Step 1: Transcribe
+    info("Transcribing audio...")
     if use_groq:
         if not api_key:
             error("No Groq API key!")
             sys.exit(1)
-        
         audio_minutes = duration / 60
-        info(f"Audio to transcribe: {format_duration(duration)} ({audio_minutes:.1f} min)")
-        
-        return transcribe_groq(input_path, duration, api_key, chunk_size)
+        info(f"  Audio: {format_duration(duration)} ({audio_minutes:.1f} min)")
+        words = transcribe_groq(input_path, duration, api_key, chunk_size)
     else:
         temp_wav = input_path.parent / f"{input_path.stem}_temp.wav"
         try:
-            info("Extracting audio for local Whisper...")
+            info("  Extracting audio...")
             extract_audio_wav(input_path, temp_wav)
             words = transcribe_local(temp_wav, duration)
-            return words
         finally:
             if temp_wav.exists():
                 temp_wav.unlink()
-
-def stage4_remove_fillers_export(
-    input_path: Path,
-    words: List[WordSegment],
-    output_xml: Path,
-    output_video: Optional[Path] = None,
-    render: bool = False
-) -> Tuple[Path, Optional[Path]]:
-    """Stage 3b: Detect filler words and export to Premiere Pro XML."""
-    info("Detecting fillers & exporting...")
     
+    info(f"  Found {len(words)} words")
+    
+    # Step 2: Detect fillers
+    info("Detecting filler words...")
     filler_cuts = detect_filler_cuts(words)
     merged_cuts = merge_cuts(filler_cuts)
-    
     total_filler_time = sum(e - s for s, e in merged_cuts)
-    info(f"Found {len(merged_cuts)} filler segments ({total_filler_time:.1f}s)")
+    info(f"  Found {len(merged_cuts)} fillers ({total_filler_time:.1f}s)")
     
+    # Step 3: Export
     ae_path = find_auto_editor()
     
     cut_args = []
@@ -566,10 +571,11 @@ def stage4_remove_fillers_export(
     
     try:
         subprocess.run(cmd_xml, capture_output=True, text=True, check=True)
-        success(f"Premiere Pro XML: {output_xml.name}")
+        success(f"XML exported: {output_xml.name}")
     except subprocess.CalledProcessError as e:
         warn(f"XML export failed: {e.stderr[:300] if e.stderr else 'Unknown'}")
     
+    # Optional: Render final video
     rendered_path = None
     if render and output_video:
         info("Rendering final video...")
@@ -588,12 +594,12 @@ def stage4_remove_fillers_export(
         
         try:
             subprocess.run(cmd_render, capture_output=True, text=True, check=True)
-            success(f"Rendered video: {output_video.name}")
+            success(f"Video rendered: {output_video.name}")
             rendered_path = output_video
         except subprocess.CalledProcessError as e:
             warn(f"Render failed: {e.stderr[:300] if e.stderr else 'Unknown'}")
     
-    return output_xml, rendered_path
+    return words, output_xml, rendered_path
 
 # --- Main Processing Pipeline ---
 def process_video(
@@ -604,12 +610,11 @@ def process_video(
     render: bool = False
 ):
     """
-    OPTIMIZED PIPELINE:
+    3-PHASE PIPELINE:
     
-    1. Remove silence FIRST (fast, local) → shorter video
-    2. Enhance audio with DeepFilterNet AI → clean voice
-    3. Transcribe (on shorter, enhanced video)
-    4. Remove fillers + Export to Premiere Pro XML
+    Phase 1: Cut silent parts (auto-editor)
+    Phase 2: Enhance audio (DeepFilterNet AI)
+    Phase 3: Cut awkward parts / fillers (transcribe → detect → cut)
     """
     
     if not input_path.exists():
@@ -628,7 +633,7 @@ def process_video(
     cprint("═" * 65, Colors.CYAN)
     info(f"Input: {input_path.name}")
     info(f"Duration: {format_duration(original_duration)}")
-    info(f"Engine: {'☁️  Groq API (Whisper Large V3 Turbo)' if use_groq else '🖥️  Local Whisper (small)'}")
+    info(f"Transcription: {'☁️  Groq API (Whisper Large V3)' if use_groq else '🖥️  Local Whisper'}")
     info(f"Enhancement: {'🧠 DeepFilterNet AI' if enhance else '❌ Disabled'}")
     print()
     
@@ -645,61 +650,68 @@ def process_video(
     base_name = input_path.stem
     work_dir = input_path.parent
     
-    # === STAGE 1: Remove Silence ===
+    # ╔═══════════════════════════════════════════════════════════════╗
+    # ║  PHASE 1: CUT SILENT PARTS                                    ║
+    # ╚═══════════════════════════════════════════════════════════════╝
     print()
-    cprint("─" * 50, Colors.BLUE)
+    cprint("┌─────────────────────────────────────────────────────────┐", Colors.BLUE)
+    cprint("│  PHASE 1: CUT SILENT PARTS                              │", Colors.BLUE + Colors.BOLD)
+    cprint("└─────────────────────────────────────────────────────────┘", Colors.BLUE)
+    
     silence_removed_file = work_dir / f"{base_name}_no_silence.mp4"
     
     if silence_removed_file.exists() and silence_removed_file.stat().st_size > 10000:
-        info("Using existing silence-removed file...")
-        stage1_duration = get_duration(silence_removed_file)
+        info("Using cached file...")
+        phase1_duration = get_duration(silence_removed_file)
+        silence_saved = original_duration - phase1_duration
+        silence_saved_pct = (silence_saved / original_duration * 100) if original_duration > 0 else 0
+        success(f"Already cut: saved {format_duration(silence_saved)} ({silence_saved_pct:.0f}%)")
     else:
-        silence_removed_file, stage1_duration = stage1_remove_silence(input_path, silence_removed_file)
+        silence_removed_file, phase1_duration = phase1_cut_silence(input_path, silence_removed_file)
     
-    silence_saved = original_duration - stage1_duration
-    silence_saved_pct = (silence_saved / original_duration * 100) if original_duration > 0 else 0
-    cprint(f"  💡 Silence removal saved {format_duration(silence_saved)} ({silence_saved_pct:.0f}%)", Colors.GREEN)
-    
-    # === STAGE 2: Audio Enhancement ===
+    # ╔═══════════════════════════════════════════════════════════════╗
+    # ║  PHASE 2: ENHANCE AUDIO (DeepFilterNet AI)                    ║
+    # ╚═══════════════════════════════════════════════════════════════╝
     processing_file = silence_removed_file
     if enhance:
         print()
-        cprint("─" * 50, Colors.BLUE)
+        cprint("┌─────────────────────────────────────────────────────────┐", Colors.BLUE)
+        cprint("│  PHASE 2: ENHANCE AUDIO (DeepFilterNet AI)              │", Colors.BLUE + Colors.BOLD)
+        cprint("└─────────────────────────────────────────────────────────┘", Colors.BLUE)
+        
         enhanced_file = work_dir / f"{base_name}_enhanced.mp4"
         
         if enhanced_file.exists() and enhanced_file.stat().st_size > 10000:
-            info("Using existing enhanced file...")
+            info("Using cached enhanced file...")
             processing_file = enhanced_file
         else:
-            processing_file = stage2_enhance_audio(silence_removed_file, enhanced_file)
+            processing_file = phase2_enhance_audio(silence_removed_file, enhanced_file)
     
-    # === STAGE 3: Transcription ===
+    # ╔═══════════════════════════════════════════════════════════════╗
+    # ║  PHASE 3: CUT AWKWARD PARTS (FILLERS)                         ║
+    # ╚═══════════════════════════════════════════════════════════════╝
     print()
-    cprint("─" * 50, Colors.BLUE)
-    words = stage3_transcribe(
-        processing_file,
-        stage1_duration,
-        use_groq=use_groq,
-        api_key=api_key,
-        chunk_size=chunk_size
-    )
-    info(f"Transcribed {len(words)} words")
+    cprint("┌─────────────────────────────────────────────────────────┐", Colors.BLUE)
+    cprint("│  PHASE 3: CUT AWKWARD PARTS (FILLERS)                   │", Colors.BLUE + Colors.BOLD)
+    cprint("└─────────────────────────────────────────────────────────┘", Colors.BLUE)
     
-    # === STAGE 4: Filler Removal + Export ===
-    print()
-    cprint("─" * 50, Colors.BLUE)
     output_xml = work_dir / f"{base_name}_premiere.xml"
     output_video = work_dir / f"{base_name}_final.mp4" if render else None
     
-    xml_path, video_path = stage4_remove_fillers_export(
+    words, xml_path, video_path = phase3_cut_fillers(
         processing_file,
-        words,
+        phase1_duration,
+        use_groq,
+        api_key,
+        chunk_size,
         output_xml,
         output_video,
-        render=render
+        render
     )
     
-    # === SUMMARY ===
+    # ╔═══════════════════════════════════════════════════════════════╗
+    # ║  SUMMARY                                                      ║
+    # ╚═══════════════════════════════════════════════════════════════╝
     print()
     cprint("═" * 65, Colors.GREEN)
     cprint("  ✅ PROCESSING COMPLETE!", Colors.BOLD + Colors.GREEN)
@@ -712,7 +724,7 @@ def process_video(
         filler_cuts = detect_filler_cuts(words)
         merged_cuts = merge_cuts(filler_cuts)
         filler_time = sum(e - s for s, e in merged_cuts)
-        final_duration = stage1_duration - filler_time
+        final_duration = phase1_duration - filler_time
     
     total_saved = original_duration - final_duration
     total_saved_pct = (total_saved / original_duration * 100) if original_duration > 0 else 0
@@ -750,7 +762,7 @@ def interactive_mode() -> Tuple[bool, int]:
     print()
     print("  [2] ☁️  Groq API (Whisper Large V3 Turbo) ⭐ RECOMMENDED")
     print("      • FREE: 7,200 audio sec/hour")
-    print("      • Best accuracy for Arabic/English dialects")
+    print("      • Best accuracy for Arabic/English")
     print()
     
     api_key = get_groq_key()
@@ -780,14 +792,13 @@ def interactive_mode() -> Tuple[bool, int]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced Auto-Editor - Remove silence, enhance audio, remove fillers",
+        description="Enhanced Auto-Editor - Remove silence, enhance audio, cut fillers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-PIPELINE:
-  1. Remove silence (auto-editor, fast, local)
-  2. Enhance audio (DeepFilterNet AI)
-  3. Transcribe (Groq API or local Whisper)
-  4. Remove fillers → Export Premiere Pro XML
+3-PHASE PIPELINE:
+  Phase 1: Cut silent parts (auto-editor)
+  Phase 2: Enhance audio (DeepFilterNet AI)
+  Phase 3: Cut awkward parts / fillers → Export XML
 
 Examples:
   edit video.mp4                  # Interactive mode
