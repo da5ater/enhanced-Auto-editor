@@ -41,6 +41,35 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
+# --- Fix for missing CUDA libraries (Arch Linux / venv) ---
+def add_cuda_to_path():
+    """Adds local nvidia pip package paths to LD_LIBRARY_PATH"""
+    site_packages = Path(__file__).parent / ".." / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    
+    # Also check user site-packages if not running from venv
+    import site
+    user_site = Path(site.getusersitepackages())
+    
+    paths_to_check = [site_packages, user_site]
+    
+    libs_to_add = []
+    for sp in paths_to_check:
+        cublas = sp / "nvidia" / "cublas" / "lib"
+        cudnn = sp / "nvidia" / "cudnn" / "lib"
+        if cublas.exists(): libs_to_add.append(str(cublas))
+        if cudnn.exists(): libs_to_add.append(str(cudnn))
+    
+    if libs_to_add:
+        current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        new_ld = ":".join(libs_to_add + [current_ld])
+        os.environ["LD_LIBRARY_PATH"] = new_ld
+        # We must re-exec if we changed LD_LIBRARY_PATH for it to take effect on loaded shared libs?
+        # Actually, for ctypes/import it might work if done before import, 
+        # but faster-whisper uses CTranslate2 which loads dynamically.
+        # Let's just set it in os.environ, usually enough for dlopen.
+
+add_cuda_to_path()
+
 # --- Configuration ---
 CONFIG_DIR = Path.home() / ".config" / "enhanced-auto-editor"
 CONFIG_FILE = CONFIG_DIR / "config.json"
